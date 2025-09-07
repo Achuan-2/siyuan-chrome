@@ -504,7 +504,7 @@
             border-radius: var(--b3-border-radius);
             box-shadow: var(--b3-dialog-shadow);
             z-index: 1000;
-            max-height: 200px;
+            max-height: 250px;
             overflow-y: auto;
         }
 
@@ -526,7 +526,6 @@
             list-style: none;
             margin: 0;
             padding: 0;
-            max-height: 150px;
             overflow-y: auto;
         }
 
@@ -670,6 +669,7 @@
                 <!-- 这里将由JS填充模板变量的帮助信息 -->
             </div>
             <div class="template-buttons">
+                <button id="restoreTemplate" class="b3-button" style="background-color: #e0e0e0; color: #333; width: auto;" data-i18n="template_restore_default">Restore default</button>
                 <button id="cancelTemplate" class="b3-button"
                     style="background-color: #e0e0e0; color: #333; width: auto;"
                     data-i18n="template_cancel">Cancel</button>

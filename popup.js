@@ -1,3 +1,17 @@
+// 默认剪藏模板（用于首次加载与恢复默认）
+function getDefaultTemplate() {
+    return '---\n' +
+        '\n' +
+        '- ${title}${siteName ? " - " + siteName : ""}\n' +
+        '- [${urlDecoded}](${url}) \n' +
+        '${excerpt ? "- " + excerpt : ""}\n' +
+        '- ${date} ${time}\n' +
+        '\n' +
+        '---\n' +
+        '\n' +
+        '${content}';
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     const ipElement = document.getElementById('ip')
     const tokenElement = document.getElementById('token')
@@ -5,8 +19,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const tagsElement = document.getElementById('tags')
     const assetsElement = document.getElementById('assets')
     const expOpenAfterClipElement = document.getElementById('expOpenAfterClip')
-    const searchDatabaseElement = document.getElementById('searchDatabase')
-    const databaseSelectElement = document.getElementById('databaseSelect')
     const expElement = document.getElementById('exp')
     const expGroupElement = document.getElementById('expGroup')
     const expSpanElement = document.getElementById('expSpan')
@@ -132,23 +144,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     })
 
-    searchDatabaseElement.addEventListener('change', () => {
-        chrome.storage.sync.set({
-            searchDatabaseKey: searchDatabaseElement.value,
-        })
-        updateDatabaseSearch()
-    })
-
-    databaseSelectElement.addEventListener('change', () => {
-        const selectedOption = databaseSelectElement.options[databaseSelectElement.selectedIndex];
-        const selectedDatabaseID = selectedOption.value;
-        const selectedDatabaseName = selectedOption.innerText;
-        chrome.storage.sync.set({
-            selectedDatabaseID: selectedDatabaseID,
-            selectedDatabaseName: selectedDatabaseName,
-        })
-    })
-
     // 添加模板配置按钮点击事件
     const templateConfigBtn = document.getElementById('templateConfig')
     if (templateConfigBtn) {
@@ -156,6 +151,15 @@ document.addEventListener('DOMContentLoaded', () => {
             // 打开模板配置弹窗
             const templateModal = document.getElementById('templateModal')
             if (templateModal) {
+                // 打开时预填充当前模板（无则回退默认）
+                const templateTextArea = document.getElementById('templateText')
+                if (templateTextArea) {
+                    chrome.storage.sync.get({
+                        clipTemplate: getDefaultTemplate(),
+                    }, (t) => {
+                        templateTextArea.value = t.clipTemplate || getDefaultTemplate()
+                    })
+                }
                 templateModal.style.display = 'block'
             }
         })
@@ -181,6 +185,23 @@ document.addEventListener('DOMContentLoaded', () => {
                             templateSavedMsg.style.display = 'none'
                         }, 2000)
                     }
+                }
+            })
+        })
+    }
+
+    // 添加模板恢复默认按钮事件
+    const restoreTemplateBtn = document.getElementById('restoreTemplate')
+    if (restoreTemplateBtn) {
+        restoreTemplateBtn.addEventListener('click', () => {
+            const templateTextArea = document.getElementById('templateText')
+            const def = getDefaultTemplate()
+            if (templateTextArea) templateTextArea.value = def
+            chrome.storage.sync.set({ clipTemplate: def }, () => {
+                const templateSavedMsg = document.getElementById('templateSavedMsg')
+                if (templateSavedMsg) {
+                    templateSavedMsg.style.display = 'block'
+                    setTimeout(() => { templateSavedMsg.style.display = 'none' }, 2000)
                 }
             })
         })
@@ -312,16 +333,7 @@ document.addEventListener('DOMContentLoaded', () => {
         expRemoveImgLink: false,
         expListDocTree: false,
         expSvgToImg: false,
-        clipTemplate: '---\n' +
-            '\n' +
-            '- ${title}${siteName ? " - " + siteName : ""}\n' +
-            '- [${urlDecoded}](${url}) \n' +
-            '${excerpt ? "- " + excerpt : ""}\n' +
-            '- ${date} ${time}\n' +
-            '\n' +
-            '---\n' +
-            '\n' +
-            '${content}',
+        clipTemplate: getDefaultTemplate(),
     }, async function (items) {
         siyuanLoadLanguageFile(items.langCode, (data) => {
             siyuanTranslateDOM(data); // 在这里使用加载的i18n数据
@@ -368,44 +380,74 @@ document.addEventListener('DOMContentLoaded', () => {
     })
 })
 
-const updateSearch = () => {
+const updateSearch = async () => {
     const ipElement = document.getElementById('ip')
     const tokenElement = document.getElementById('token')
     const savePathInput = document.getElementById('savePathInput')
     const savePathOptions = document.getElementById('savePathOptions')
     const savePathDisplay = document.getElementById('savePathDisplay')
 
-    fetch(ipElement.value + '/api/filetree/searchDocs', {
-        method: 'POST',
-        redirect: "manual",
-        headers: {
-            'Authorization': 'Token ' + tokenElement.value,
-        },
-        body: JSON.stringify({
-            "k": savePathInput.value,
-            "flashcard": false
+    // Validate token
+    if (!tokenElement.value || tokenElement.value.trim() === '') {
+        const msg = chrome.i18n.getMessage('tip_token_miss') || 'Please configure the API token before clipping content'
+        document.getElementById('log').innerHTML = msg
+        return
+    }
+
+    // Validate token
+    if (!tokenElement.value || tokenElement.value.trim() === '') {
+        const msg = chrome.i18n.getMessage('tip_token_miss') || 'Please configure the API token before clipping content'
+        document.getElementById('log').innerHTML = msg
+        return
+    }
+
+    // Normalize base URL
+    let base = (ipElement.value || '').trim()
+    if (!base) base = 'http://127.0.0.1:6806'
+    if (!/^https?:\/\//i.test(base)) base = 'http://' + base
+    while (base.endsWith('/')) base = base.slice(0, -1)
+
+    try {
+        const response = await fetch(base + '/api/filetree/searchDocs', {
+            method: 'POST',
+            headers: {
+                'Authorization': 'Token ' + tokenElement.value,
+                'Content-Type': 'application/json; charset=UTF-8',
+            },
+            body: JSON.stringify({
+                k: savePathInput.value || '',
+                flashcard: false,
+            })
         })
-    }).then((response) => {
+        if (response.status === 401 || response.status === 403) {
+            const msg = chrome.i18n.getMessage('tip_token_invalid') || 'Invalid API token'
+            document.getElementById('log').innerHTML = msg
+            return
+        }
         if (response.status !== 200) {
-            document.getElementById('log').innerHTML = "Authentication failed, please check API token"
+            const msg = chrome.i18n.getMessage('tip_siyuan_kernel_unavailable') || 'Please start SiYuan and ensure network connectivity before trying again'
+            document.getElementById('log').innerHTML = msg
             return
         }
-
-        document.getElementById('log').innerHTML = ""
-        return response.json()
-    }).then((response) => {
-        if (0 !== response.code) {
-            document.getElementById('log').innerHTML = "Search docs failed"
+        document.getElementById('log').innerHTML = ''
+        let data
+        try {
+            data = await response.json()
+        } catch (e) {
+            const msg = chrome.i18n.getMessage('tip_siyuan_kernel_unavailable') || 'Please start SiYuan and ensure network connectivity before trying again'
+            document.getElementById('log').innerHTML = msg
             return
         }
-
+        if (!data || data.code !== 0 || !Array.isArray(data.data)) {
+            return
+        }
         let optionsHTML = ''
         if (!savePathInput.value.trim()) {
-            optionsHTML = '<li data-notebook="" data-parent="">无</li>' // Default empty option when no search term
+            optionsHTML = `<li data-notebook="" data-parent="">${chrome.i18n.getMessage("save_path_none")}</li>`
         }
         let selectedHPath = ''
-        response.data.forEach(doc => {
-            const parentDoc = doc.path.substring(doc.path.toString().lastIndexOf('/') + 1).replace(".sy", '')
+        data.data.forEach(doc => {
+            const parentDoc = String(doc.path).substring(String(doc.path).lastIndexOf('/') + 1).replace('.sy', '')
             let selectedClass = ""
             if (savePathDisplay.dataset.notebook === doc.box && savePathDisplay.dataset.parent === parentDoc &&
                 savePathDisplay.dataset.parenthpath === doc.hPath) {
@@ -420,7 +462,10 @@ const updateSearch = () => {
         if (selectedHPath) {
             savePathDisplay.textContent = selectedHPath
         }
-    })
+    } catch (e) {
+        const msg = chrome.i18n.getMessage('tip_siyuan_kernel_unavailable') || 'Please start SiYuan and ensure network connectivity before trying again'
+        document.getElementById('log').innerHTML = msg
+    }
 }
 
 const updateDatabaseSearch = () => {
@@ -459,11 +504,15 @@ const updateDatabaseSearch = () => {
 
         let optionsHTML = ''
         if (!databaseInput.value.trim()) {
-            optionsHTML = '<li data-id="">无</li>' // Default empty option when no search term
+            optionsHTML = `<li data-id="">${chrome.i18n.getMessage("database_none")}</li>`
         }
         let selectedName = '-- Select Database --'
         if (response.data && response.data.results) {
             response.data.results.forEach(db => {
+                if (!db.avName) {
+                    return;
+                }
+
                 let selectedClass = ""
                 if (databaseDisplay.dataset.selectedId === db.avID) {
                     selectedClass = "selected";
@@ -484,105 +533,10 @@ const updateDatabaseSearch = () => {
     })
 }
 
-const updateDatabaseSearch = () => {
-    const ipElement = document.getElementById('ip')
-    const tokenElement = document.getElementById('token')
-    const searchDatabaseElement = document.getElementById('searchDatabase')
-    const databaseSelectElement = document.getElementById('databaseSelect')
-
-    // if (!ipElement.value || !tokenElement.value) {
-    //     databaseSelectElement.innerHTML = `<option value="">${chrome.i18n.getMessage("tip_token_miss") || 'Configure API token first'}</option>`
-    //     return
-    // }
-
-    fetch(ipElement.value + '/api/av/searchAttributeView', {
-        method: 'POST',
-        headers: {
-            'Authorization': 'Token ' + tokenElement.value,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            avID: "", // Search in all AVs
-            keyword: searchDatabaseElement.value,
-        })
-    }).then((response) => {
-        if (response.status !== 200) {
-            document.getElementById('log').innerHTML = "Database search: Authentication failed or API error."
-            databaseSelectElement.innerHTML = `<option value="">${chrome.i18n.getMessage("tip_siyuan_kernel_unavailable") || 'Error searching databases'}</option>`
-            return null
-        }
-        document.getElementById('log').innerHTML = ""
-        return response.json()
-    }).then((response) => {
-        if (!response || response.code !== 0) {
-            if (response && response.msg) {
-                document.getElementById('log').innerHTML = "Database search: " + response.msg
-            } else {
-                document.getElementById('log').innerHTML = "Database search failed."
-            }
-            databaseSelectElement.innerHTML = `<option value="">${chrome.i18n.getMessage("tip_siyuan_kernel_unavailable") || 'Error searching databases'}</option>`
-            return
-        }
-
-        let optionsHTML = '<option value="">-- Select Database --</option>' // Default empty option
-        if (response.data && response.data.results) {
-            response.data.results.forEach(db => {
-                let selected = ""
-                if (databaseSelectElement.dataset.selectedId === db.avID) {
-                    selected = "selected";
-                }
-                optionsHTML += `<option value="${db.avID}" ${selected}>${escapeHtml(db.avName)}</option>`
-            })
-        }
-        databaseSelectElement.innerHTML = optionsHTML
-
-        // Reselect or select first if nothing was pre-selected
-        const previouslySelectedID = databaseSelectElement.dataset.selectedId;
-        let foundPrevious = false;
-        if (previouslySelectedID) {
-            for (let i = 0; i < databaseSelectElement.options.length; i++) {
-                if (databaseSelectElement.options[i].value === previouslySelectedID) {
-                    databaseSelectElement.selectedIndex = i;
-                    foundPrevious = true;
-                    break;
-                }
-            }
-        }
-
-        if (!foundPrevious && databaseSelectElement.options.length > 1 && !previouslySelectedID) { // More than the default "-- Select --"
-            // No auto-selection, let user choose.
-        } else if (!foundPrevious && !previouslySelectedID) {
-            // No results or only default, clear stored selection
-            chrome.storage.sync.set({
-                selectedDatabaseID: '',
-                selectedDatabaseName: '',
-            })
-        } else {
-            // If a selection is made (either pre-selected or first item if only one result)
-            const selectedOption = databaseSelectElement.options[databaseSelectElement.selectedIndex];
-            if (selectedOption && selectedOption.value) {
-                chrome.storage.sync.set({
-                    selectedDatabaseID: selectedOption.value,
-                    selectedDatabaseName: selectedOption.innerText,
-                })
-            } else {
-                chrome.storage.sync.set({ // Clear if default is selected
-                    selectedDatabaseID: '',
-                    selectedDatabaseName: '',
-                })
-            }
-        }
-
-
-    }).catch(e => {
-        console.error("Database search fetch error:", e)
-        document.getElementById('log').innerHTML = "Database search: Network error or Siyuan not available."
-        databaseSelectElement.innerHTML = `<option value="">${chrome.i18n.getMessage("tip_siyuan_kernel_unavailable") || 'Error searching databases'}</option>`
-    })
-}
-
 const escapeHtml = (unsafe) => {
-    return unsafe
+    if (unsafe == null) return ''
+    const s = String(unsafe)
+    return s
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
@@ -628,10 +582,30 @@ const siyuanGetReadability = async (tabId) => {
 let siyuanLangData = null;
 let siyuanLangCode = null;
 
+function siyuanResolveLocale(lang) {
+    try {
+        const available = ['ar','de','en','es','fr','he','it','ja','pl','ru','zh_CN','zh_TW'];
+        if (!lang) return 'en';
+        let code = String(lang).replace('-', '_');
+        if (code.toLowerCase().startsWith('zh')) {
+            const lower = code.toLowerCase();
+            if (lower.includes('tw') || lower.includes('hk') || lower.includes('mo') || lower.includes('hant')) {
+                return 'zh_TW';
+            }
+            return 'zh_CN';
+        }
+        if (available.includes(code)) return code;
+        const base = code.split('_')[0];
+        if (available.includes(base)) return base;
+        return 'en';
+    } catch (e) {
+        return 'en';
+    }
+}
+
 function siyuanGetDefaultLangCode() {
-    const langCode = navigator.language || navigator.userLanguage || chrome.runtime.getManifest().default_locale;
-    const normalizedLangCode = langCode.replace('-', '_');
-    return normalizedLangCode;
+    const raw = navigator.language || navigator.userLanguage || chrome.runtime.getManifest().default_locale || 'en';
+    return siyuanResolveLocale(raw);
 }
 
 // 合并当前语言和英语（en）翻译的函数
@@ -644,15 +618,14 @@ async function siyuanMergeTranslations(translations, langCode) {
 
     // 如果当前语言不是英语，则加载英语翻译文件
     if (langCode !== defaultLangCode) {
-        const enTranslationFile = chrome.runtime.getURL(`_locales/${langCode}/messages.json`);
+        const enTranslationFile = chrome.runtime.getURL(`_locales/${defaultLangCode}/messages.json`);
         try {
-            // 异步加载英语翻译文件
             const response = await fetch(enTranslationFile);
             if (!response.ok) {
                 throw new Error('Network response was not ok');
             }
-            const enData = await response.json(); // 解析JSON
-            defaultTranslations = enData; // 保存英语翻译数据
+            const enData = await response.json();
+            defaultTranslations = enData;
         } catch (err) {
             console.error("Failed to load English translation:", err);
         }
@@ -664,59 +637,53 @@ async function siyuanMergeTranslations(translations, langCode) {
 }
 
 async function siyuanLoadLanguageFile(langCode, callback) {
-    // 检查是否已经加载过数据
-    if (siyuanLangData && siyuanLangCode === langCode) {
-        // 如果已经加载，直接调用回调并传递数据
+    const normalized = (typeof siyuanResolveLocale === 'function') ? siyuanResolveLocale(langCode) : (langCode || 'en');
+
+    if (siyuanLangData && siyuanLangCode === normalized) {
         callback(siyuanLangData);
         return;
     }
 
-    // 先加载当前语言的翻译文件
-    try {
-        const translationFile = chrome.runtime.getURL(`_locales/${langCode}/messages.json`);
-        const response = await fetch(translationFile);
-        if (!response.ok) {
-            throw new Error('Network response was not ok');
+    const tryLoad = async (code) => {
+        try {
+            const translationFile = chrome.runtime.getURL(`_locales/${code}/messages.json`);
+            const response = await fetch(translationFile);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return await response.json();
+        } catch (e) {
+            return null;
         }
-        const data = await response.json(); // 解析JSON
+    };
 
-        // 加载成功，检查并补充缺失的翻译
-        // 先把加载的翻译数据保存在全局变量中
-        const mergedData = await siyuanMergeTranslations(data, langCode); // 等待合并翻译
-        siyuanLangData = mergedData;
-        siyuanLangCode = langCode;
+    let data = await tryLoad(normalized);
+    if (!data) data = await tryLoad('en');
+    if (!data) data = {};
 
-        // 调用回调并传递数据
-        callback(mergedData);
-
-    } catch (error) {
-        console.error('There was a problem with the fetch operation:', error);
-    }
+    const mergedData = await siyuanMergeTranslations(data, normalized);
+    siyuanLangData = mergedData;
+    siyuanLangCode = normalized;
+    callback(mergedData);
 }
 
 function siyuanTranslateDOM(translations) {
+    const t = translations || {};
     const elements = document.querySelectorAll('[data-i18n]');
     elements.forEach(element => {
         const key = element.getAttribute('data-i18n');
-        if (!translations[key] || !translations[key].message) {
-            console.warn(`siyuanTranslateDOM Missing translation for key: ${key}`);
+        const msg = t[key] && t[key].message ? t[key].message : null;
+        if (!msg) {
             return;
         }
-
-        const translation = translations[key].message;
-        if (element.placeholder !== undefined) {
-            // 翻译 placeholder 属性
-            element.placeholder = translation;
+        if ('placeholder' in element) {
+            element.placeholder = msg;
         } else {
-            // 翻译 textContent
-            element.textContent = translation;
+            element.textContent = msg;
         }
     });
 
-    // 确保模板帮助文本也被更新
     const templateHelp = document.getElementById('templateHelp');
-    if (templateHelp && translations.template_help) {
-        templateHelp.innerHTML = translations.template_help.message;
+    if (templateHelp && t.template_help && t.template_help.message) {
+        templateHelp.innerHTML = t.template_help.message;
     }
 }
 
